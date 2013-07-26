@@ -2,7 +2,7 @@ package ZMQ::Simple;
 use Moose;
 use ZMQ::LibZMQ3; # FIXME: can we make this dynamic somehow?
 use ZMQ::Constants ':all';
-use namespace::autoclean;
+# use namespace::autoclean;
 
 my $debug = 0;
 sub log {
@@ -21,10 +21,9 @@ ZMQ::Simple - simplify typical ZeroMQ use cases to one line
 
     # same thing:
     my $socket = ZMQ::Simple->push->bind('tcp://127.0.0.1:9000');
-    my $socket = ZMQ::Simple->push->bind('127.0.0.1:9000');
-    my $socket = ZMQ::Simple->push('127.0.0.1:9000'); # auto bind for push
+    my $socket = ZMQ::Simple->push('tcp://127.0.0.1:9000'); # auto bind for push
 
-    my $socket = ZMQ::Simple->pull('127.0.0.1:9000'); # auto connect for pull
+    my $socket = ZMQ::Simple->pull('tcp://127.0.0.1:9000'); # auto connect for pull
     #other methods: req/req, pub/sub, ...
 
     # getsockopt / setsockopt
@@ -43,22 +42,22 @@ ZMQ::Simple - simplify typical ZeroMQ use cases to one line
 
 =cut
 
-=head2 type
+=head2 socket_type
 
 the type of socket to generate (PUSH, PULL, REQ, REP, PUB, SUB, ...).
 for creating the socket, an upper-cased version of this type will be used.
 
 =cut
 
-has type => (
+has socket_type => (
     is        => 'rw',
-    isa       => 'Str', ### TODO: create a subtype with coercion
-    predicate => 'has_type',
+    isa       => 'Str',
+    predicate => 'has_socket_type',
 );
 
 has bind => (
     is        => 'rw',
-    isa       => 'Str', ### TODO: create a subtype with coercion
+    isa       => 'Str',
     predicate => 'must_bind',
     clearer   => 'do_not_bind',
 );
@@ -103,9 +102,9 @@ sub _build__zmq_socket {
         if !$self->must_connect && !$self->must_bind;
 
     die 'no type specified'
-        if !$self->has_type;
+        if !$self->has_socket_type;
 
-    my $socket = zmq_socket($self->_zmq_context, $self->type);
+    my $socket = zmq_socket($self->_zmq_context, $self->socket_type);
 
     if ($self->must_bind) {
         $self->log('bind: ' . $self->bind);
@@ -147,7 +146,7 @@ sub push {
     my $self = $class->new;
     $self->log('push');
     
-    $self->type(ZMQ_PUSH);
+    $self->socket_type(ZMQ_PUSH);
     $self->connect(@_) if @_;
 
     return $self;
@@ -165,7 +164,7 @@ sub pull {
     my $self = $class->new;
     $self->log('pull');
 
-    $self->type(ZMQ_PULL);
+    $self->socket_type(ZMQ_PULL);
     $self->bind(@_) if @_;
 
     return $self;
