@@ -5,12 +5,8 @@ reduce typical ZMQ use cases to a single line
 
     use ZMQ::Simple;
     
-    # create a socket, both do the same thing:
-    my $socket = ZMQ::Simple->push->bind('tcp://127.0.0.1:9000');
-    my $socket = ZMQ::Simple->push('tcp://127.0.0.1:9000'); # auto bind for push
-    
-    my $socket = ZMQ::Simple->pull('tcp://127.0.0.1:9000'); # auto connect for pull
-    #other methods: req/req, pub/sub, ...
+    # create a socket by specifying type and address
+    my $socket = ZMQ::Simple->socket(push => 'tcp://127.0.0.1:9000');
     
     # getsockopt / setsockopt
     $socket->option('name', 'value');

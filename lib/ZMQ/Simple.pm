@@ -1,15 +1,13 @@
 package ZMQ::Simple;
 use Moose;
+use Moose::Util::TypeConstraints;
 use ZMQ::LibZMQ3; # FIXME: can we make this dynamic somehow?
 use ZMQ::Constants ':all';
+# no namespace::autoclean as zmq_* methods would vanish
 # use namespace::autoclean;
 
-my $debug = 0;
-sub log {
-    my $self = shift;
-
-    print @_, "\n" if $debug;
-}
+my $debug = 1;
+sub log { print @_[1..$#_], "\n" if $debug }
 
 =head1 NAME
 
@@ -19,12 +17,12 @@ ZMQ::Simple - simplify typical ZeroMQ use cases to one line
 
     use ZMQ::Simple;
 
-    # same thing:
-    my $socket = ZMQ::Simple->push->bind('tcp://127.0.0.1:9000');
-    my $socket = ZMQ::Simple->push('tcp://127.0.0.1:9000'); # auto bind for push
-
-    my $socket = ZMQ::Simple->pull('tcp://127.0.0.1:9000'); # auto connect for pull
-    #other methods: req/req, pub/sub, ...
+    # create a socket by specifying type and address
+    # each type has a typical socket behavor (bind/connect)
+    my $socket = ZMQ::Simple->socket(push => 'tcp://127.0.0.1:9000');
+    
+    # the long version
+    my $socket = ZMQ::Simple->socket('push')->connect('tcp://127.0.0.1:9000');
 
     # getsockopt / setsockopt
     $socket->option('name', 'value');
@@ -42,37 +40,40 @@ ZMQ::Simple - simplify typical ZeroMQ use cases to one line
 
 =cut
 
-=head2 socket_type
-
-the type of socket to generate (PUSH, PULL, REQ, REP, PUB, SUB, ...).
-for creating the socket, an upper-cased version of this type will be used.
-
-=cut
+our %info_for = (
+    PUSH => { type => ZMQ_PUSH,  method => 'connect' },
+    PULL => { type => ZMQ_PULL,  method => 'bind' },
+    PUB  => { type => ZMQ_PUB,   method => 'bind' },
+    SUB  => { type => ZMQ_SUB,   method => 'connect', }, # filter!
+    REQ  => { type => ZMQ_REQ,   method => 'connect' },
+    REP  => { type => ZMQ_REP,   method => 'bind' },
+);
 
 has socket_type => (
-    is        => 'rw',
-    isa       => 'Str',
-    predicate => 'has_socket_type',
+    is  => 'rw',
+    isa => 'Str',
 );
 
-has bind => (
+has address => (
     is        => 'rw',
-    isa       => 'Str',
-    predicate => 'must_bind',
-    clearer   => 'do_not_bind',
+    isa       => 'Str', ### TODO: allow arrayref
+    predicate => 'has_address',
 );
 
-has connect => (
-    is        => 'rw',
-    isa       => 'Str',
-    predicate => 'must_connect',
-    clearer   => 'do_not_connect',
+enum 'SocketMethod', [qw(bind connect)];
+has method => (
+    is         => 'rw',
+    isa        => 'SocketMethod',
+    lazy_build => 1,
 );
 
-after bind    => sub { $_[0]->do_not_connect };
-after connect => sub { $_[0]->do_not_bind };
+sub _build_method {
+    my $self = shift;
+    
+    $info_for{$self->socket_type}->method;
+}
 
-# the ZMQ context
+### TODO: _zmq_context should be a singleton
 has _zmq_context => (
     is         => 'ro',
     isa        => 'Any',
@@ -88,33 +89,29 @@ sub _build__zmq_context {
 }
 
 has _zmq_socket => (
-    is         => 'ro',
+    is         => 'rw',
     isa        => 'Any',
     lazy_build => 1,
 );
 
 sub _build__zmq_socket {
     my $self = shift;
+    
+    my $type = $self->socket_type;
+    $self->log("build socket of type '$type'");
 
-    $self->log('build socket');
+    my $info = $info_for{$type} or die "unknown type '$type'";
+    my $socket = zmq_socket($self->_zmq_context, $info->{type});
 
-    die 'neither bind or connect called'
-        if !$self->must_connect && !$self->must_bind;
-
-    die 'no type specified'
-        if !$self->has_socket_type;
-
-    my $socket = zmq_socket($self->_zmq_context, $self->socket_type);
-
-    if ($self->must_bind) {
-        $self->log('bind: ' . $self->bind);
-        zmq_bind($socket, $self->bind)
-            and die "Bind failed: $!";
-    } elsif ($self->must_connect) {
-        $self->log('connect: ' . $self->connect);
-        zmq_connect($socket, $self->connect);
-    }
-
+    die 'no address to bind/connect to' if !$self->has_address;
+    
+    no strict 'refs';
+    $self->log("$info->{method} '${\$self->address}'");
+    my $zmq_method = "zmq_$info->{method}";
+    $zmq_method->($socket, $self->address)
+        and die "$info->{operation} '${\$self->address}' failed: $!";
+    use strict 'refs';
+    
     return $socket;
 }
 
@@ -122,55 +119,69 @@ sub _build__zmq_socket {
 
 =cut
 
-# geht das?
-# foreach my $operation ( [ push => ZMQ_PUSH, 'bind'], ... ) {
-#     my ($method, $type, $direction) = @$operation;
-#
-#     after $method => sub {
-#         my $self = shift;
-#
-#         $self->type($type);
-#         $self->$direction(@_) if $direction && @_;
-#     };
-# }
-
-=head2 push ( [ $address ] )
-
-set the socket type to PUSH and optionally bind a given address
-
-=cut
-
-sub push {
-    my $class = shift;
-
-    my $self = $class->new;
-    $self->log('push');
+sub DEMOLISH {
+    my $self = shift;
     
-    $self->socket_type(ZMQ_PUSH);
-    $self->connect(@_) if @_;
-
-    return $self;
+    $self->log('close socket');
+    zmq_close($self->_zmq_socket) if $self->_has_zmq_socket;
 }
 
-=head2 pull
+=head2 socket ( type, address [, additional info ] )
 
-set the socket type to PULL and optionally connect to a given address
+creates and returns a socket of specified type. Depending on the type the
+socket will either connect to or bind the specified address.
+
+TODO: if address is a hashref execute multiple binds or connects
 
 =cut
 
-sub pull {
-    my $class = shift;
+sub socket {
+    my $class   = shift;
+    my $type    = uc shift;
+    my $address = shift;
 
-    my $self = $class->new;
-    $self->log('pull');
-
-    $self->socket_type(ZMQ_PULL);
-    $self->bind(@_) if @_;
+    my $self = $class->new(
+        socket_type => $type,
+        ($address ? (address => $address) : ()),
+    );
+    
+    # what to do with additional info?
+    # SUB: rc = zmq_setsockopt (subscriber, ZMQ_SUBSCRIBE, filter, strlen (filter));
 
     return $self;
 }
 
 # ... do more
+
+=head2 bind ( $address )
+
+bind an address
+
+=cut
+
+sub bind {
+    my ($self, $address) = @_;
+    
+    $self->method('bind');
+    $self->address($address);
+    
+    return $self;
+}
+
+=head2 connect ( $address )
+
+connect to an address
+
+=cut
+
+sub connect {
+    my ($self, $address) = @_;
+    
+    $self->method('connect');
+    $self->address($address);
+    
+    return $self;
+}
 
 =head2 send ( $message [, $flags] )
 
@@ -206,6 +217,14 @@ sub receive {
 
 __PACKAGE__->meta->make_immutable;
 1;
+
+=head1 SEE ALSO
+
+=over
+
+=item L<ZMQx::Class|https://github.com/domm/ZMQx-Class>
+
+=back
 
 =head1 AUTHOR
 
