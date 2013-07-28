@@ -6,7 +6,7 @@ use ZMQ::Constants ':all';
 # no namespace::autoclean as zmq_* methods would vanish
 # use namespace::autoclean;
 
-my $debug = 1;
+my $debug = 0;
 sub log { print @_[1..$#_], "\n" if $debug }
 
 =head1 NAME
